@@ -1,2 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MiniCraft — Vanilla JS</title>
+  <style>
+    :root{
+      --ui-bg:#0f1115; --ui:#1a1f29; --ink:#e5e7eb; --muted:#9ca3af; --accent:#22c55e; --danger:#ef4444;
+      --tile-size:24px;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:#0b0d10;color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial}
+    .wrap{display:grid;grid-template-rows:auto 1fr auto;height:100%}
+    header{display:flex;gap:.75rem;align-items:center;padding:.6rem 1rem;background:var(--ui-bg);border-bottom:1px solid #232833;}
+    header h1{font-size:1rem;margin:0;color:#cbd5e1;font-weight:700;letter-spacing:.3px}
+    header .pill{display:flex;align-items:center;gap:.5rem;background:var(--ui);padding:.4rem .65rem;border-radius:999px;border:1px solid #2a3140}
+    header button, header select{background:var(--ui);color:var(--ink);border:1px solid #2a3140;border-radius:8px;padding:.45rem .65rem;cursor:pointer}
+    header button:hover{filter:brightness(1.1)}
+    header .toggle{display:inline-flex;align-items:center;gap:.5rem}
 
+    #stage{position:relative;display:grid;grid-template-columns:1fr 280px;gap:12px;padding:12px;height:calc(100vh - 96px)}
+    #game{position:relative;background:#11161e;border:1px solid #232833;border-radius:14px;overflow:hidden;}
+    canvas{display:block;width:100%;height:100%}
+    #ui{background:var(--ui-bg);border:1px solid #232833;border-radius:14px;padding:12px;overflow:auto}
 
+    .hotbar{position:absolute;left:50%;bottom:12px;transform:translateX(-50%);display:flex;gap:8px;background:rgba(15,17,21,.8);backdrop-filter:blur(6px);padding:8px;border-radius:12px;border:1px solid #232833}
+    .slot{width:42px;height:42px;border-radius:10px;border:2px solid #262f3d;display:flex;align-items:center;justify-content:center;position:relative}
+    .slot.active{border-color:#60a5fa}
+    .slot small{position:absolute;bottom:-18px;left:50%;transform:translateX(-50%);font-size:.7rem;color:var(--muted)}
+
+    .legend{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:8px}
+    .legend .cell{display:flex;align-items:center;gap:8px;background:var(--ui);padding:8px;border-radius:10px;border:1px solid #2a3140}
+    .swatch{width:20px;height:20px;border-radius:4px;border:1px solid rgba(0,0,0,.25)}
+
+    .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;background:#0f172a;border:1px solid #1f2937;border-radius:6px;padding:.1rem .4rem}
+    footer{padding:.6rem 1rem;color:var(--muted);background:var(--ui-bg);border-top:1px solid #232833;text-align:center}
+    a{color:#93c5fd}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🧱 MiniCraft — 2D Voxel Sandbox (HTML + CSS + JS)</h1>
+    <div class="pill toggle"><label><input id="creativeToggle" type="checkbox" checked> Creative</label></div>
+    <div class="pill"><button id="saveBtn" title="Save world to your browser">Save</button><button id="loadBtn" title="Load world from your browser">Load</button><button id="resetBtn" title="Generate a fresh world">New World</button></div>
+    <div class="pill">
+      Zoom <button id="zoomOut">−</button><button id="zoomIn">＋</button>
+    </div>
+    <div class="pill">Seed <input id="seedInput" value="minicraft" style="width:160px;background:transparent;border:0;color:#e5e7eb;outline:none"> <button id="reseed">Regenerate</button></div>
+    <div class="pill">Blocks: <select id="palette"></select></div>
+  </header>
+
+  <div id="stage">
+    <div id="game">
+      <canvas id="c"></canvas>
+      <div class="hotbar" id="hotbar"></div>
+    </div>
+    <aside id="ui">
+      <h3 style="margin:.2rem 0 .6rem">How to play</h3>
+      <ul style="margin:.2rem 0 .8rem;line-height:1.5">
+        <li>Move camera: <span class="kbd">W</span> <span class="kbd">A</span> <span class="kbd">S</span> <span class="kbd">D</span> or arrows</li>
+        <li>Mine block: <span class="kbd">Left Click</span> • Place block: <span class="kbd">Right Click</span> (or <span class="kbd">Shift + Left</span>)</li>
+        <li>Select block: number keys <span class="kbd">1–9</span> or use the dropdown above</li>
+        <li>Zoom: <span class="kbd">＋</span>/<span class="kbd">−</span> or mouse wheel</li>
+        <li>Toggle Creative (infinite blocks) in the top bar</li>
+      </ul>
+
+      <h4 style="margin:.8rem 0 .4rem">Blocks</h4>
+      <div class="legend" id="legend"></div>
+
+      <h4 style="margin:1rem 0 .4rem">Tips</h4>
+      <p style="color:var(--muted)">World is 160×96 tiles with simple terrain, trees, water and ores. There’s a soft day–night cycle. Your world saves to <em>localStorage</em>.</p>
+    </aside>
+  </div>
+
+  <footer>
+    Built with a single file. No libraries. Have fun! — MiniCraft
+  </footer>
+</div>
+
+<script>
+(() => {
+  // ===== Utilities =====
+  const clamp = (n,a,b)=>Math.max(a,Math.min(b,n));
+  const lerp=(a,b,t)=>a+(b-a)*t;
+  function mulberry32(seed){let t = seed >>> 0; return function(){t += 0x6D2B79F5; let r = Math.imul(t ^ t >>> 15, 1 | t); r ^= r + Math.imul(r ^ r >>> 7, 61 | r); return ((r ^ r >>> 14) >>> 0) / 4294967296;}}
+  function hashStr(s){let h=2166136261>>>0;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+  function valueNoise1D(seed){const rnd = mulberry32(seed); const grads = new Map();
+    const g = x=>{const xi=Math.floor(x); if(!grads.has(xi)) grads.set(xi, rnd()*2-1); return grads.get(xi)}
+    const smooth = t=>t*t*(3-2*t);
+    return x=>{const i=Math.floor(x), f=x-i; const a=g(i), b=g(i+1); return lerp(a,b,smooth(f));}
+  }
+
+  // ===== Blocks =====
+  const Blocks = {
+    AIR:{id:0,name:'Air',solid:false,color:'rgba(0,0,0,0)'},
+    GRASS:{id:1,name:'Grass',solid:true,color:'#3ba34c'},
+    DIRT:{id:2,name:'Dirt',solid:true,color:'#7c5a3a'},
+    STONE:{id:3,name:'Stone',solid:true,color:'#8a8f98'},
+    SAND:{id:4,name:'Sand',solid:true,color:'#d8c789'},
+    WATER:{id:5,name:'Water',solid:false,color:'rgba(70,120,200,0.65)'},
+    WOOD:{id:6,name:'Wood',solid:true,color:'#8b5a2b'},
+    LEAF:{id:7,name:'Leaf',solid:false,color:'rgba(46,160,67,0.9)'},
+    COAL:{id:8,name:'Coal Ore',solid:true,color:'#30343a'},
+    IRON:{id:9,name:'Iron Ore',solid:true,color:'#a78b69'},
+    GLASS:{id:10,name:'Glass',solid:true,color:'rgba(200,230,255,0.35)'}
+  }
+  const BlockList = [Blocks.GRASS,Blocks.DIRT,Blocks.STONE,Blocks.SAND,Blocks.WATER,Blocks.WOOD,Blocks.LEAF,Blocks.COAL,Blocks.IRON,Blocks.GLASS];
+
+  // ===== World =====
+  const W = 160, H = 96; // world size in tiles
+  let world = createArray(W,H,0);
+  function createArray(w,h,fill){const arr=new Array(w); for(let x=0;x<w;x++){arr[x]=new Array(h); for(let y=0;y<h;y++) arr[x][y]=fill} return arr}
+
+  // Terrain generation
+  function generate(seedStr){
+    const seed = hashStr(seedStr);
+    const hNoise = valueNoise1D(seed);
+    const mNoise = valueNoise1D(seed^0x9e3779b9);
+    const oreNoise = valueNoise1D(seed^0x51f4d3);
+    // base heights
+    for(let x=0;x<W;x++){
+      const n = hNoise(x*0.07)*0.5 + hNoise(x*0.013)*0.5; // mix two octaves
+      const sea = 52;
+      let height = Math.floor(sea + n*18);
+      for(let y=0;y<H;y++){
+        let id = 0;
+        if(y>height+10) id = Blocks.STONE.id;
+        else if(y>height+2) id = Blocks.DIRT.id;
+        else if(y===height+1) id = Blocks.GRASS.id;
+        else if(y>sea && y<=height+1) id = Blocks.DIRT.id;
+        else if(y>sea-1 && y<=sea) id = Blocks.SAND.id;
+        else id = Blocks.WATER.id;
+        world[x][y]=id;
+      }
+      // ores inside stone
+      for(let y=height+8;y<H;y++){
+        const o = oreNoise(x*0.11 + y*0.09);
+        if(world[x][y]===Blocks.STONE.id){
+          if(o>0.62) world[x][y]=Blocks.IRON.id;
+          else if(o<-0.62) world[x][y]=Blocks.COAL.id;
+        }
+      }
+      // trees on grassy tops
+      if(Math.abs(mNoise(x*0.18))>0.58){
+        let gy = height+1; if(gy>=0 && gy<H-5 && world[x][gy]===Blocks.GRASS.id){
+          const th = 3 + Math.floor(Math.abs(mNoise(x*0.77))*3);
+          for(let t=1;t<=th;t++){ if(gy-t>=0) world[x][gy-t]=Blocks.WOOD.id; }
+          const ry = gy-th; // canopy
+          for(let dx=-2;dx<=2;dx++) for(let dy=-2;dy<=2;dy++){
+            if(Math.abs(dx)+Math.abs(dy)<=3){ const xx=x+dx, yy=ry+dy; if(xx>=0&&xx<W&&yy>=0&&yy<H) world[xx][yy]=Blocks.LEAF.id; }
+          }
+        }
+      }
+    }
+  }
+
+  // ===== Rendering =====
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  let tileSize = 24; // device pixels; we map to CSS size by canvas resize
+  const camera = {x: W/2, y: H/2, zoom: 1};
+
+  function resize(){
+    const rect = document.getElementById('game').getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio||1);
+    canvas.width = Math.floor(rect.width * dpr);
+    canvas.height = Math.floor(rect.height * dpr);
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = rect.height + 'px';
+    ctx.setTransform(1,0,0,1,0,0);
+    ctx.scale(dpr,dpr);
+  }
+  window.addEventListener('resize', resize);
+
+  function draw(){
+    const rect = canvas.getBoundingClientRect();
+    const vw = Math.ceil(rect.width/(tileSize*camera.zoom));
+    const vh = Math.ceil(rect.height/(tileSize*camera.zoom));
+    const startX = clamp(Math.floor(camera.x - vw/2)-1,0,W-1);
+    const endX = clamp(Math.ceil(camera.x + vw/2)+1,0,W-1);
+    const startY = clamp(Math.floor(camera.y - vh/2)-1,0,H-1);
+    const endY = clamp(Math.ceil(camera.y + vh/2)+1,0,H-1);
+
+    // sky gradient with day-night
+    const t = (Date.now()/1000)%60; // 60s full cycle
+    const k = (Math.sin(t/60*Math.PI*2)+1)/2; // 0..1
+    const skyTop = `rgb(${Math.floor(8+40*k)}, ${Math.floor(12+70*k)}, ${Math.floor(20+110*k)})`;
+    const skyBot = `rgb(${Math.floor(16+70*k)}, ${Math.floor(20+100*k)}, ${Math.floor(40+160*k)})`;
+    const g = ctx.createLinearGradient(0,0,0,canvas.height);
+    g.addColorStop(0, skyTop); g.addColorStop(1, skyBot);
+    ctx.fillStyle = g; ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    ctx.save();
+    ctx.translate(rect.width/2, rect.height/2);
+    ctx.scale(camera.zoom, camera.zoom);
+    ctx.translate(-camera.x*tileSize, -camera.y*tileSize);
+
+    for(let x=startX;x<=endX;x++){
+      for(let y=startY;y<=endY;y++){
+        const id = world[x][y];
+        if(id===0) continue;
+        const b = getBlockById(id);
+        ctx.fillStyle = b.color;
+        ctx.fillRect(x*tileSize, y*tileSize, tileSize, tileSize);
+      }
+    }
+
+    // grid selection highlight
+    if(mouse.grid){
+      ctx.strokeStyle = 'rgba(255,255,255,.6)';
+      ctx.lineWidth = 2/camera.zoom;
+      ctx.strokeRect(mouse.grid.x*tileSize, mouse.grid.y*tileSize, tileSize, tileSize);
+    }
+
+    ctx.restore();
+
+    // hotbar render is pure DOM
+    requestAnimationFrame(draw);
+  }
+
+  function getBlockById(id){
+    for(const b of Object.values(Blocks)) if(b.id===id) return b; return Blocks.AIR;
+  }
+
+  // ===== Interaction =====
+  const keys = new Set();
+  window.addEventListener('keydown', e=>{ keys.add(e.key.toLowerCase());
+    // number hotbar 1-9
+    if(/^[1-9]$/.test(e.key)) selectSlot(parseInt(e.key)-1);
+  });
+  window.addEventListener('keyup', e=>keys.delete(e.key.toLowerCase()));
+
+  function updateCamera(dt){
+    const speed = 18 * (1/camera.zoom);
+    if(keys.has('arrowleft')||keys.has('a')) camera.x -= speed*dt;
+    if(keys.has('arrowright')||keys.has('d')) camera.x += speed*dt;
+    if(keys.has('arrowup')||keys.has('w')) camera.y -= speed*dt;
+    if(keys.has('arrowdown')||keys.has('s')) camera.y += speed*dt;
+    camera.x = clamp(camera.x, 0, W); camera.y = clamp(camera.y, 0, H);
+  }
+
+  // Mouse -> grid mapping
+  const mouse = {x:0,y:0,grid:null}
+  canvas.addEventListener('contextmenu', e=>e.preventDefault());
+  canvas.addEventListener('mousemove', e=>{
+    const rect = canvas.getBoundingClientRect();
+    const px = e.clientX - rect.left, py = e.clientY - rect.top;
+    mouse.x = px; mouse.y = py;
+    // inverse camera transform
+    const cx = (px - rect.width/2)/camera.zoom + camera.x*tileSize;
+    const cy = (py - rect.height/2)/camera.zoom + camera.y*tileSize;
+    const gx = Math.floor(cx/tileSize), gy = Math.floor(cy/tileSize);
+    if(gx>=0&&gx<W&&gy>=0&&gy<H) mouse.grid = {x:gx,y:gy}; else mouse.grid=null;
+  });
+  canvas.addEventListener('wheel', e=>{
+    camera.zoom = clamp(camera.zoom * (e.deltaY<0?1.1:0.9), 0.5, 3.5);
+  }, {passive:true});
+
+  function mine(g){ if(!g) return; const id = world[g.x][g.y]; if(id!==Blocks.WATER.id && id!==Blocks.AIR.id){ addToInventory(id,1); world[g.x][g.y]=Blocks.AIR.id; }
+  }
+  function place(g){ if(!g) return; const id = getSelectedBlock().id; if(id===Blocks.AIR.id) return; if(world[g.x][g.y]===Blocks.AIR.id || world[g.x][g.y]===Blocks.WATER.id){ if(isCreative() || takeFromInventory(id,1)) world[g.x][g.y]=id; }
+  }
+  canvas.addEventListener('mousedown', e=>{
+    if(!mouse.grid) return;
+    if(e.button===0 && !e.shiftKey) mine(mouse.grid);
+    else place(mouse.grid);
+  });
+
+  // ===== Inventory & UI =====
+  const inv = new Map();
+  function addToInventory(id,n){ inv.set(id,(inv.get(id)||0)+n); renderHotbar(); }
+  function takeFromInventory(id,n){ const have=inv.get(id)||0; if(have>=n){ inv.set(id,have-n); renderHotbar(); return true } return false }
+  function isCreative(){ return document.getElementById('creativeToggle').checked }
+
+  // Palette dropdown & legend
+  const paletteSel = document.getElementById('palette');
+  for(let i=0;i<BlockList.length;i++){
+    const opt=document.createElement('option'); opt.value=i; opt.textContent=BlockList[i].name; paletteSel.appendChild(opt);
+  }
+  paletteSel.addEventListener('change', ()=>selectSlot(parseInt(paletteSel.value)));
+
+  const hotbarEl = document.getElementById('hotbar');
+  let hotIndex = 0;
+  function getSelectedBlock(){ return BlockList[hotIndex] }
+  function selectSlot(i){ hotIndex = clamp(i,0,BlockList.length-1); renderHotbar(); paletteSel.value = hotIndex; }
+  function renderHotbar(){
+    hotbarEl.innerHTML='';
+    BlockList.forEach((b,i)=>{
+      const slot=document.createElement('div'); slot.className='slot'+(i===hotIndex?' active':'');
+      const sw=document.createElement('div'); sw.className='swatch'; sw.style.width='26px'; sw.style.height='26px'; sw.style.borderRadius='6px'; sw.style.background=b.color; slot.appendChild(sw);
+      const label=document.createElement('small'); label.textContent=(i+1)+''; slot.appendChild(label);
+      if(!isCreative()){
+        const count = inv.get(b.id)||0; const tag=document.createElement('div'); tag.textContent=count; tag.style.position='absolute'; tag.style.top='-10px'; tag.style.right='-6px'; tag.style.fontSize='.7rem'; tag.style.background='#0b0f16'; tag.style.border='1px solid #2a3140'; tag.style.borderRadius='10px'; tag.style.padding='2px 6px'; slot.appendChild(tag);
+      }
+      slot.addEventListener('click',()=>selectSlot(i));
+      hotbarEl.appendChild(slot);
+    })
+  }
+
+  // Legend panel
+  const legend = document.getElementById('legend');
+  function renderLegend(){ legend.innerHTML=''; BlockList.forEach(b=>{ const cell=document.createElement('div'); cell.className='cell'; const sw=document.createElement('div'); sw.className='swatch'; sw.style.background=b.color; const name=document.createElement('div'); name.textContent=b.name; cell.appendChild(sw); cell.appendChild(name); legend.appendChild(cell); }) }
+
+  document.getElementById('creativeToggle').addEventListener('change', ()=>{ renderHotbar(); });
+
+  // Save / Load / Reset
+  function save(){ const data={world,inv:Array.from(inv.entries()),seed:document.getElementById('seedInput').value,camera,version:1}; localStorage.setItem('minicraft-save', JSON.stringify(data)); flash('World saved.'); }
+  function load(){ const raw=localStorage.getItem('minicraft-save'); if(!raw){ flash('No save found.', true); return } try{ const data=JSON.parse(raw); world=data.world; inv.clear(); for(const [k,v] of data.inv) inv.set(parseInt(k),v); if(data.camera){ Object.assign(camera,data.camera); } document.getElementById('seedInput').value=data.seed||'minicraft'; renderHotbar(); flash('World loaded.'); } catch(e){ console.error(e); flash('Failed to load save.', true);} }
+  function reset(){ world=createArray(W,H,0); generate(document.getElementById('seedInput').value); inv.clear(); renderHotbar(); flash('Generated a new world.'); }
+
+  document.getElementById('saveBtn').onclick=save;
+  document.getElementById('loadBtn').onclick=load;
+  document.getElementById('resetBtn').onclick=reset;
+  document.getElementById('reseed').onclick=reset;
+  document.getElementById('zoomIn').onclick=()=>camera.zoom=clamp(camera.zoom*1.1,0.5,3.5);
+  document.getElementById('zoomOut').onclick=()=>camera.zoom=clamp(camera.zoom*0.9,0.5,3.5);
+
+  // Small toast
+  const toast=document.createElement('div'); Object.assign(toast.style,{position:'fixed',left:'50%',bottom:'24px',transform:'translateX(-50%)',padding:'10px 14px',borderRadius:'10px',background:'#101521',border:'1px solid #2a3140',color:'#e5e7eb',opacity:'0',pointerEvents:'none',transition:'opacity .25s, transform .25s',zIndex:10}); document.body.appendChild(toast);
+  let toastTimer=null; function flash(msg,err=false){ toast.textContent=msg; toast.style.borderColor=err?'#553':'#2a3140'; toast.style.opacity='1'; toast.style.transform='translateX(-50%) translateY(-6px)'; clearTimeout(toastTimer); toastTimer=setTimeout(()=>{toast.style.opacity='0'; toast.style.transform='translateX(-50%)';},1200); }
+
+  // ===== Main loop =====
+  let last = performance.now();
+  function tick(now){ const dt = Math.min(0.05,(now-last)/1000); last=now; updateCamera(dt); requestAnimationFrame(tick); }
+
+  // Init
+  function start(){ resize(); renderLegend(); renderHotbar(); reset(); draw(); requestAnimationFrame(tick); }
+  start();
+})();
+</script>
+</body>
+</html>
